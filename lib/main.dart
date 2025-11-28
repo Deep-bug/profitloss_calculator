@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 
 import 'models/calc_models.dart';
+import 'packages/network/api_exception.dart';
 import 'services/api_service.dart';
 
-const String apiBaseUrl = 'http://localhost:8080';
+const String apiBaseUrl = 'http://42.192.127.13:8889';
 
 void main() {
   runApp(const MyApp());
@@ -38,6 +39,7 @@ class ProfitLossCalculatorPage extends StatefulWidget {
 }
 
 class _ProfitLossCalculatorPageState extends State<ProfitLossCalculatorPage> {
+  // 维护当前页面上所有动态表单行
   final _forms = <_RuleFormData>[];
   final _api = ProfitLossApiService(baseUrl: apiBaseUrl);
 
@@ -62,6 +64,7 @@ class _ProfitLossCalculatorPageState extends State<ProfitLossCalculatorPage> {
     super.dispose();
   }
 
+  /// 向后端查询已保存规则
   Future<void> _loadSavedRules() async {
     setState(() {
       _loadingRules = true;
@@ -100,6 +103,7 @@ class _ProfitLossCalculatorPageState extends State<ProfitLossCalculatorPage> {
     row.dispose();
   }
 
+  /// 将单行表单输入转成请求模型，并完成基础校验
   CalcRequest? _buildRequestFromRow(_RuleFormData row) {
     final name = row.nameController.text.trim();
     final code = row.codeController.text.trim();
@@ -109,9 +113,7 @@ class _ProfitLossCalculatorPageState extends State<ProfitLossCalculatorPage> {
     final ratio = double.tryParse(row.ratioController.text.trim());
 
     String? error;
-    if (name.isEmpty || code.isEmpty) {
-      error = '请输入个股名称和代码。';
-    } else if ([buyPrice, stopLoss, maxLoss, ratio].contains(null)) {
+    if ([buyPrice, stopLoss, maxLoss, ratio].contains(null)) {
       error = '价格、亏损与盈亏比必须为数字。';
     } else if (buyPrice! <= 0 ||
         stopLoss! <= 0 ||
@@ -137,6 +139,7 @@ class _ProfitLossCalculatorPageState extends State<ProfitLossCalculatorPage> {
     );
   }
 
+  /// 点击“计算”按钮时，根据当前行输入推导结果
   Future<void> _calculateRow(_RuleFormData row) async {
     final request = _buildRequestFromRow(row);
     if (request == null) return;
@@ -149,7 +152,7 @@ class _ProfitLossCalculatorPageState extends State<ProfitLossCalculatorPage> {
     });
 
     try {
-      final result = await _api.calculate(request);
+      final result = _computeResult(request);
       if (!mounted) return;
       setState(() {
         row.result = result;
@@ -167,6 +170,7 @@ class _ProfitLossCalculatorPageState extends State<ProfitLossCalculatorPage> {
     }
   }
 
+  /// 保存规则：提交后端并用返回结果刷新列表
   Future<void> _saveRow(_RuleFormData row) async {
     final request = _buildRequestFromRow(row);
     if (request == null) return;
@@ -184,8 +188,10 @@ class _ProfitLossCalculatorPageState extends State<ProfitLossCalculatorPage> {
         row.result = savedRule.result;
         _savedRules = [savedRule, ..._savedRules];
       });
+      final displayName = request.name.isEmpty ? '未命名' : request.name;
+      final displayCode = request.code.isEmpty ? '未填写代码' : request.code;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已保存 ${request.name}(${request.code})')),
+        SnackBar(content: Text('已保存 $displayName($displayCode)')),
       );
     } catch (e) {
       if (!mounted) return;
@@ -200,6 +206,7 @@ class _ProfitLossCalculatorPageState extends State<ProfitLossCalculatorPage> {
     }
   }
 
+  /// 删除指定规则后立即刷新本地状态
   Future<void> _deleteRule(String id) async {
     setState(() {
       _deletingRuleId = id;
@@ -243,7 +250,7 @@ class _ProfitLossCalculatorPageState extends State<ProfitLossCalculatorPage> {
           children: [
             const Text(
               '批量管理个股仓位：为每个标的设置买入、止损和最大亏损，'
-              '通过接口计算所需仓位，保存后可在下方列表中统一查看与删除。',
+              '通过本地计算所需仓位，保存后可在下方列表中统一查看与删除。',
               style: TextStyle(fontSize: 16),
             ),
             const SizedBox(height: 16),
@@ -299,7 +306,7 @@ class _ProfitLossCalculatorPageState extends State<ProfitLossCalculatorPage> {
                 Expanded(
                   child: _buildTextField(
                     controller: row.nameController,
-                    label: '股票名称',
+                    label: '股票名称（选填）',
                     hintText: '如：贵州茅台',
                   ),
                 ),
@@ -307,7 +314,7 @@ class _ProfitLossCalculatorPageState extends State<ProfitLossCalculatorPage> {
                 Expanded(
                   child: _buildTextField(
                     controller: row.codeController,
-                    label: '股票代码',
+                    label: '股票代码（选填）',
                     hintText: '如：600519',
                   ),
                 ),
@@ -458,7 +465,10 @@ class _ProfitLossCalculatorPageState extends State<ProfitLossCalculatorPage> {
           ..._savedRules.map(
             (rule) => Card(
               child: ListTile(
-                title: Text('${rule.request.name} (${rule.request.code})'),
+                title: Text(
+                  '${rule.request.name.isEmpty ? '未命名' : rule.request.name}'
+                  ' (${rule.request.code.isEmpty ? '未填写代码' : rule.request.code})',
+                ),
                 subtitle: Text(
                   '买入 ${_format(rule.request.buyPrice)} / '
                   '止损 ${_format(rule.request.stopLoss)} / '
@@ -488,8 +498,30 @@ class _ProfitLossCalculatorPageState extends State<ProfitLossCalculatorPage> {
   String _format(double value) {
     return value.toStringAsFixed(value.abs() >= 100 ? 0 : 2);
   }
+
+  /// 根据输入数据推导仓位、风险和目标价等核心指标
+  CalcResult _computeResult(CalcRequest request) {
+    final unitRisk = request.buyPrice - request.stopLoss;
+    if (unitRisk <= 0) {
+      throw ArgumentError('止损点必须低于买入点');
+    }
+
+    final quantity = request.maxLoss / unitRisk;
+    final requiredCapital = quantity * request.buyPrice;
+    final maxProfit = unitRisk * request.riskReward * quantity;
+    final takeProfit = request.buyPrice + unitRisk * request.riskReward;
+
+    return CalcResult(
+      unitRisk: unitRisk,
+      quantity: quantity,
+      requiredCapital: requiredCapital,
+      maxProfit: maxProfit,
+      takeProfit: takeProfit,
+    );
+  }
 }
 
+/// 以 Chip 形式展示一行计算结果
 class _ResultChips extends StatelessWidget {
   const _ResultChips({required this.result});
 
@@ -521,6 +553,7 @@ class _ResultChips extends StatelessWidget {
   }
 }
 
+/// 封装单行表单所需的控制器与状态
 class _RuleFormData {
   _RuleFormData()
       : nameController = TextEditingController(),

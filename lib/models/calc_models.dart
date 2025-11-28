@@ -1,3 +1,4 @@
+/// 前端表单收集的计算请求
 class CalcRequest {
   const CalcRequest({
     required this.name,
@@ -36,6 +37,7 @@ class CalcRequest {
   }
 }
 
+/// 根据输入推导出的结果
 class CalcResult {
   const CalcResult({
     required this.unitRisk,
@@ -70,6 +72,7 @@ class CalcResult {
       };
 }
 
+/// 封装一次保存的规则及其结果
 class CalcRule {
   const CalcRule({
     required this.id,
@@ -98,4 +101,11 @@ class CalcRule {
           : null,
     );
   }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'request': request.toJson(),
+        'result': result.toJson(),
+        if (createdAt != null) 'createdAt': createdAt!.toIso8601String(),
+      };
 }
